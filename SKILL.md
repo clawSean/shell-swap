@@ -1,12 +1,12 @@
 ---
-name: brain-swap
+name: shell-swap
 description: >
   Admin tool to mass-switch all OpenClaw sessions and cron jobs to a different
   model. Use when asked to change model, switch to haiku/sonnet/opus, set the
-  default model, do a fleet-wide model change, or "brain swap".
+  default model, do a fleet-wide model change, or "shell swap".
 ---
 
-# Brain Swap
+# Shell Swap
 
 Mass-update the model across all OpenClaw sessions, cron jobs, and config
 in one shot.

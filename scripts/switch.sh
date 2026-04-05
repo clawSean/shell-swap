@@ -21,13 +21,13 @@ case "$ALIAS" in
   spark)    MODEL_ID="gpt-5.3-codex-spark";    FULL_ID="openai-codex/gpt-5.3-codex-spark" ;;
   codex)    MODEL_ID="gpt-5.3-codex";          FULL_ID="openai-codex/gpt-5.3-codex" ;;
   *)
-    echo "[brain-swap] Unknown alias: $ALIAS (use: haiku, sonnet, opus, gpt-5.4, spark, codex)" >&2
+    echo "[shell-swap] Unknown alias: $ALIAS (use: haiku, sonnet, opus, gpt-5.4, spark, codex)" >&2
     exit 1
     ;;
 esac
 
-echo "[brain-swap] Target: $ALIAS ($FULL_ID)"
-[[ -n "$DRY_RUN" ]] && echo "[brain-swap] DRY RUN — no files will be modified"
+echo "[shell-swap] Target: $ALIAS ($FULL_ID)"
+[[ -n "$DRY_RUN" ]] && echo "[shell-swap] DRY RUN — no files will be modified"
 
 # --- 1. Update openclaw.json ---
 echo ""
@@ -156,8 +156,8 @@ fi
 
 echo ""
 if [[ -n "$DRY_RUN" ]]; then
-  echo "[brain-swap] Dry run complete. No files modified."
+  echo "[shell-swap] Dry run complete. No files modified."
 else
-  echo "[brain-swap] Done. All sessions and jobs now using $ALIAS ($FULL_ID)."
-  echo "[brain-swap] A gateway restart may be needed for config changes to take effect."
+  echo "[shell-swap] Done. All sessions and jobs now using $ALIAS ($FULL_ID)."
+  echo "[shell-swap] A gateway restart may be needed for config changes to take effect."
 fi
