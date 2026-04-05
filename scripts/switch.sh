@@ -14,17 +14,20 @@ DRY_RUN=""
 [[ "${2:-}" == "--dry-run" ]] && DRY_RUN="1"
 
 case "$ALIAS" in
-  haiku)  MODEL_ID="claude-haiku-4-5";  FULL_ID="anthropic/claude-haiku-4-5" ;;
-  sonnet) MODEL_ID="claude-sonnet-4-6"; FULL_ID="anthropic/claude-sonnet-4-6" ;;
-  opus)   MODEL_ID="claude-opus-4-6";   FULL_ID="anthropic/claude-opus-4-6" ;;
+  haiku)    MODEL_ID="claude-haiku-4-5";       FULL_ID="anthropic/claude-haiku-4-5" ;;
+  sonnet)   MODEL_ID="claude-sonnet-4-6";      FULL_ID="anthropic/claude-sonnet-4-6" ;;
+  opus)     MODEL_ID="claude-opus-4-6";        FULL_ID="anthropic/claude-opus-4-6" ;;
+  gpt-5.4)  MODEL_ID="gpt-5.4";               FULL_ID="openai-codex/gpt-5.4" ;;
+  spark)    MODEL_ID="gpt-5.3-codex-spark";    FULL_ID="openai-codex/gpt-5.3-codex-spark" ;;
+  codex)    MODEL_ID="gpt-5.3-codex";          FULL_ID="openai-codex/gpt-5.3-codex" ;;
   *)
-    echo "[shell-swap] Unknown alias: $ALIAS (use: haiku, sonnet, opus)" >&2
+    echo "[brain-swap] Unknown alias: $ALIAS (use: haiku, sonnet, opus, gpt-5.4, spark, codex)" >&2
     exit 1
     ;;
 esac
 
-echo "[shell-swap] Target: $ALIAS ($FULL_ID)"
-[[ -n "$DRY_RUN" ]] && echo "[shell-swap] DRY RUN — no files will be modified"
+echo "[brain-swap] Target: $ALIAS ($FULL_ID)"
+[[ -n "$DRY_RUN" ]] && echo "[brain-swap] DRY RUN — no files will be modified"
 
 # --- 1. Update openclaw.json ---
 echo ""
@@ -153,8 +156,8 @@ fi
 
 echo ""
 if [[ -n "$DRY_RUN" ]]; then
-  echo "[shell-swap] Dry run complete. No files modified."
+  echo "[brain-swap] Dry run complete. No files modified."
 else
-  echo "[shell-swap] Done. All sessions and jobs now using $ALIAS ($FULL_ID)."
-  echo "[shell-swap] A gateway restart may be needed for config changes to take effect."
+  echo "[brain-swap] Done. All sessions and jobs now using $ALIAS ($FULL_ID)."
+  echo "[brain-swap] A gateway restart may be needed for config changes to take effect."
 fi
