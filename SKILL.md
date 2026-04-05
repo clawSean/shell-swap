@@ -2,8 +2,8 @@
 name: shell-swap
 description: >
   Admin tool to mass-switch all OpenClaw sessions and cron jobs to a different
-  model. Use when asked to change model, switch to haiku/sonnet/opus, set the
-  default model, do a fleet-wide model change, or "shell swap".
+  model. Use when asked to change model, switch to haiku/sonnet/opus/gpt/codex
+  lanes, set the default model, do a fleet-wide model change, or "shell swap".
 ---
 
 # Shell Swap
@@ -17,7 +17,7 @@ in one shot.
 exec scripts/switch.sh <model_alias>
 ```
 
-Where `<model_alias>` is one of: `haiku`, `sonnet`, `opus`
+Where `<model_alias>` is one of: `haiku`, `sonnet`, `opus`, `gpt-5.4`, `spark`, `codex`
 
 ### What it does
 
@@ -46,6 +46,12 @@ exec scripts/switch.sh sonnet
 
 # Switch everything to opus (expensive — confirm with user first)
 exec scripts/switch.sh opus
+
+# Switch everything to GPT-5.4 lane
+exec scripts/switch.sh gpt-5.4
+
+# Switch everything to codex-spark lane
+exec scripts/switch.sh spark
 ```
 
 ### Dry run
