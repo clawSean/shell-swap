@@ -5,7 +5,7 @@ Mass-switch OpenClaw model settings across config, sessions, and cron jobs in on
 ## Included
 
 • `SKILL.md` — OpenClaw skill definition  
-• `scripts/switch.sh` — migration script (`haiku | sonnet | opus`, with `--dry-run`)
+• `scripts/switch.sh` — migration script (`haiku | sonnet | opus | gpt-5.4 | spark | codex`, with `--dry-run`)
 
 ## Usage
 
@@ -13,6 +13,15 @@ Mass-switch OpenClaw model settings across config, sessions, and cron jobs in on
 exec scripts/switch.sh sonnet --dry-run
 exec scripts/switch.sh sonnet
 ```
+
+## Supported aliases
+
+• `haiku` → `anthropic/claude-haiku-4-5`  
+• `sonnet` → `anthropic/claude-sonnet-4-6`  
+• `opus` → `anthropic/claude-opus-4-6`  
+• `gpt-5.4` → `openai-codex/gpt-5.4`  
+• `spark` → `openai-codex/gpt-5.3-codex-spark`  
+• `codex` → `openai-codex/gpt-5.3-codex`
 
 ## What it updates
 
