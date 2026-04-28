@@ -18,10 +18,11 @@ case "$ALIAS" in
   sonnet)   MODEL_ID="claude-sonnet-4-6";      FULL_ID="anthropic/claude-sonnet-4-6" ;;
   opus)     MODEL_ID="claude-opus-4-6";        FULL_ID="anthropic/claude-opus-4-6" ;;
   gpt-5.4)  MODEL_ID="gpt-5.4";               FULL_ID="openai-codex/gpt-5.4" ;;
+  gpt-5.5)  MODEL_ID="gpt-5.5";               FULL_ID="openai-codex/gpt-5.5" ;;
   spark)    MODEL_ID="gpt-5.3-codex-spark";    FULL_ID="openai-codex/gpt-5.3-codex-spark" ;;
   codex)    MODEL_ID="gpt-5.3-codex";          FULL_ID="openai-codex/gpt-5.3-codex" ;;
   *)
-    echo "[shell-swap] Unknown alias: $ALIAS (use: haiku, sonnet, opus, gpt-5.4, spark, codex)" >&2
+    echo "[shell-swap] Unknown alias: $ALIAS (use: haiku, sonnet, opus, gpt-5.4, gpt-5.5, spark, codex)" >&2
     exit 1
     ;;
 esac

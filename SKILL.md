@@ -17,7 +17,7 @@ in one shot.
 exec scripts/switch.sh <model_alias>
 ```
 
-Where `<model_alias>` is one of: `haiku`, `sonnet`, `opus`, `gpt-5.4`, `spark`, `codex`
+Where `<model_alias>` is one of: `haiku`, `sonnet`, `opus`, `gpt-5.4`, `gpt-5.5`, `spark`, `codex`
 
 ### What it does
 
@@ -49,6 +49,9 @@ exec scripts/switch.sh opus
 
 # Switch everything to GPT-5.4 lane
 exec scripts/switch.sh gpt-5.4
+
+# Switch everything to GPT-5.5 lane
+exec scripts/switch.sh gpt-5.5
 
 # Switch everything to codex-spark lane
 exec scripts/switch.sh spark
