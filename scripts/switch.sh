@@ -75,15 +75,21 @@ echo ""
 echo "=== sessions.json ==="
 if [[ -f "$SESSIONS" ]]; then
   [[ -z "$DRY_RUN" ]] && cp "$SESSIONS" "$SESSIONS.bak"
-  python3 - "$SESSIONS" "$MODEL_ID" "${DRY_RUN:-0}" <<'PYEOF'
+  python3 - "$SESSIONS" "$MODEL_ID" "$FULL_ID" "${DRY_RUN:-0}" <<'PYEOF'
 import json, sys
 
-path, target, dry = sys.argv[1], sys.argv[2], sys.argv[3] != "0"
+path, target, full_id, dry = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4] != "0"
+provider = full_id.split("/")[0]
 
 with open(path) as f:
     data = json.load(f)
 
-counts = {"model": 0, "override": 0, "skipped": 0}
+stale_fallback_fields = {
+    "modelOverrideFallbackOriginProvider",
+    "modelOverrideFallbackOriginModel",
+    "modelOverrideFallbackNotice",
+}
+counts = {"model": 0, "override": 0, "provider": 0, "source": 0, "stale": 0, "skipped": 0}
 
 def walk(obj):
     if isinstance(obj, dict):
@@ -95,6 +101,17 @@ def walk(obj):
             elif k == "modelOverride" and isinstance(v, str) and v != target and "claude-" in v:
                 obj[k] = target
                 counts["override"] += 1
+            elif k in ("providerOverride", "modelProvider") and isinstance(v, str):
+                if v != provider:
+                    obj[k] = provider
+                    counts["provider"] += 1
+            elif k == "modelOverrideSource":
+                if v != "user":
+                    obj[k] = "user"
+                    counts["source"] += 1
+            elif k in stale_fallback_fields:
+                del obj[k]
+                counts["stale"] += 1
             elif k == "model" and isinstance(v, str) and "claude-" not in v:
                 counts["skipped"] += 1
             else:
@@ -111,6 +128,9 @@ if not dry:
 
 print(f"  model fields: {counts['model']} changed")
 print(f"  modelOverride fields: {counts['override']} changed")
+print(f"  provider fields normalized: {counts['provider']} changed")
+print(f"  modelOverrideSource fields set to user: {counts['source']} changed")
+print(f"  stale fallback fields removed: {counts['stale']}")
 if counts["skipped"]:
     print(f"  skipped (non-claude): {counts['skipped']}")
 print("  (backup: sessions.json.bak)")

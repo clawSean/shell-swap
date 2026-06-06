@@ -23,7 +23,7 @@ Where `<model_alias>` is one of: `haiku`, `sonnet`, `opus`, `gpt-5.4`, `gpt-5.5`
 
 1. Updates `agents.defaults.model.primary` in `openclaw.json`
 2. Updates `agents.defaults.models` allowlist (adds the target model if missing)
-3. Rewrites all `model` and `modelOverride` fields in `agents/main/sessions/sessions.json`
+3. Rewrites all `model` and `modelOverride` fields in `agents/main/sessions/sessions.json`; normalizes `providerOverride` and `modelProvider`; sets `modelOverrideSource` to `user`; removes stale fallback origin/notice fields
 4. Rewrites all `payload.model` fields in `cron/jobs.json`
 5. Creates a backup of each file before modifying
 6. Reports counts of what changed
