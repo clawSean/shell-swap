@@ -77,7 +77,22 @@ exec scripts/switch.sh opus --dry-run
 
 ## Notes
 
-- A gateway restart may be needed for config changes to take effect
-- Active sessions pick up the new model on their next turn
+- **Runtime-aware provider:** the stamped provider is the resolved model entry's
+  `agentRuntime.id` when set, otherwise the config key's first path segment. So
+  `anthropic/claude-opus-4-6` (which runs on the `claude-cli` runtime) correctly
+  stamps provider `claude-cli`, not `anthropic`. Model and provider are written
+  together, so they cannot diverge.
+- **Safety:** all target files are JSON-validated up front (abort-before-write
+  if any is malformed), writes are atomic (tmp + rename), and `openclaw.json`
+  and every session store are backed up (`*.bak`) before modification.
+- **Scope rules:** only direct session-entry fields are rewritten — nested
+  `systemPromptReport` / `contextBudgetStatus` / `origin` blocks are left intact.
+  Sessions pinned to `auto` are skipped. `modelOverrideSource` is set to `user`
+  only on sessions whose model was actually switched (provenance preserved).
+- `--agent NAME` is a scoped switch: it touches only that agent's sessions and
+  leaves the global config primary unchanged; an unknown agent name aborts with
+  no changes.
+- A gateway restart may be needed for config changes to take effect; active
+  sessions pick up the new model on their next turn.
 - `--crons` targets the legacy `cron/jobs.json`; the cron store format has since
   migrated, so cron mutation may be a no-op until updated separately
