@@ -91,7 +91,12 @@ exec scripts/switch.sh opus --dry-run
   only on sessions whose model was actually switched (provenance preserved).
 - `--agent NAME` is a scoped switch: it touches only that agent's sessions and
   leaves the global config primary unchanged; an unknown agent name aborts with
-  no changes.
+  no changes. `--agent current` (or `--current-agent`) targets the active agent
+  via `OPENCLAW_MCP_AGENT_ID`.
+- **Tests:** `bash scripts/test.sh` runs a hermetic regression suite (44 checks)
+  covering resolution, agentRuntime provider, the schema-scoped walk, `auto`
+  preservation, divergence repair, provenance, scoping, atomicity, backups,
+  pre-validation, and dry-run. Run it before changing the script.
 - A gateway restart may be needed for config changes to take effect; active
   sessions pick up the new model on their next turn.
 - `--crons` targets the legacy `cron/jobs.json`; the cron store format has since

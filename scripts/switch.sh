@@ -37,6 +37,8 @@ can map to multiple providers, so the provider cannot be guessed safely.
 Flags:
   --agent NAME   Only rewrite this agent's session store; leaves the global
                  config primary untouched (scoped switch). Errors on unknown agent.
+                 Use "--agent current" for the active agent (OPENCLAW_MCP_AGENT_ID).
+  --current-agent  Shorthand for "--agent current"
   --all-agents   Rewrite every agent's session store + the config primary (default)
   --crons        Also rewrite cron payload.model values, if a legacy cron/jobs.json exists
   --dry-run      Show what would change without writing files
@@ -56,9 +58,10 @@ while [[ $# -gt 0 ]]; do
     --all-agents) AGENT_FILTER="" ;;
     --agent)
       shift
-      [[ $# -gt 0 ]] || { echo "[shell-swap] --agent requires a name" >&2; exit 1; }
+      [[ $# -gt 0 ]] || { echo "[shell-swap] --agent requires a name (or 'current')" >&2; exit 1; }
       AGENT_FILTER="$1"
       ;;
+    --current-agent) AGENT_FILTER="current" ;;
     -h|--help) usage; exit 0 ;;
     --*) echo "[shell-swap] Unknown flag: $1" >&2; usage >&2; exit 1 ;;
     *)
@@ -71,6 +74,15 @@ done
 
 [[ -z "$TARGET" ]] && { usage >&2; exit 1; }
 [[ -f "$CONFIG" ]] || { echo "[shell-swap] Config not found: $CONFIG" >&2; exit 1; }
+
+# "current" resolves to the active agent from the OpenClaw runtime env.
+if [[ "$AGENT_FILTER" == "current" ]]; then
+  AGENT_FILTER="${OPENCLAW_MCP_AGENT_ID:-${OPENCLAW_AGENT_ID:-}}"
+  if [[ -z "$AGENT_FILTER" ]]; then
+    echo "[shell-swap] --agent current: cannot determine the active agent (OPENCLAW_MCP_AGENT_ID unset). Pass an explicit name." >&2
+    exit 1
+  fi
+fi
 
 # --- Resolve target -> canonical {full_id, provider, model_id} from LIVE config ---
 # provider = resolved entry's agentRuntime.id if set, else first path segment.
