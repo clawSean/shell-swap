@@ -1,72 +1,83 @@
 ---
 name: shell-swap
 description: >
-  Admin tool to mass-switch all OpenClaw sessions and cron jobs to a different
-  model. Use when asked to change model, switch to haiku/sonnet/opus/gpt/codex
-  lanes, set the default model, do a fleet-wide model change, or "shell swap".
+  Admin tool to mass-switch every OpenClaw session and the default model to ANY
+  provider/model. Provider- and model-agnostic. Use when asked to change model,
+  switch lanes, set the default model, do a fleet-wide model change, or
+  "shell swap".
 ---
 
 # Shell Swap
 
-Mass-update the model across all OpenClaw sessions, cron jobs, and config
-in one shot.
+Provider/model-**agnostic** mass model switch. Resolves the target against the
+**live config alias map** (`agents.defaults.models`) — the single source of
+truth — then stamps a consistent `{model, provider}` pair across config + every
+agent session store. No hardcoded alias table; works for any model the config
+knows about (Anthropic, OpenAI, Venice, xAI, OpenRouter, NVIDIA, Ollama, …).
 
 ## Usage
 
 ```bash
-exec scripts/switch.sh <model_alias>
+exec scripts/switch.sh <target> [--agent NAME] [--all-agents] [--crons] [--dry-run]
 ```
 
-Where `<model_alias>` is one of: `haiku`, `sonnet`, `opus`, `gpt-5.4`, `gpt-5.5`, `spark`, `codex`
+`<target>` may be:
+- **alias** — any alias defined in `agents.defaults.models` (e.g. `opus`, `gpt`, `minimax`, `grok-4.3`, `kimi`)
+- **provider/model** — a full config key (e.g. `anthropic/claude-opus-4-8`, `venice/grok-4-20`)
+- **raw id** — any `provider/model` not yet in the allowlist (agnostic passthrough)
+
+Bare model names (no `/` and not a known alias) are **rejected** — the same
+model can map to multiple providers (e.g. `claude-fable-5` → `claude-work`,
+`claude-cli`, or `anthropic`), so the provider can't be guessed safely. Pass the
+full `provider/model` id instead.
 
 ### What it does
 
-1. Updates `agents.defaults.model.primary` in `openclaw.json`
-2. Updates `agents.defaults.models` allowlist (adds the target model if missing)
-3. Rewrites all `model` and `modelOverride` fields in `agents/main/sessions/sessions.json`; normalizes `providerOverride` and `modelProvider`; sets `modelOverrideSource` to `user`; removes stale fallback origin/notice fields
-4. Rewrites all `payload.model` fields in `cron/jobs.json`
-5. Creates a backup of each file before modifying
-6. Reports counts of what changed
+1. Updates `agents.defaults.model.primary` in `openclaw.json` to the full id
+2. For every agent session store (`agents/*/sessions/sessions.json`):
+   - sets `model` and `modelOverride` → the resolved model id
+   - sets `modelProvider` and `providerOverride` → the resolved provider
+   - sets `modelOverrideSource` → `user`
+   - removes stale fallback origin/notice fields
+   - model and provider are stamped **together**, so they can never diverge
+3. Optionally (`--crons`) rewrites `payload.model` in a legacy `cron/jobs.json`
+4. Backs up each modified file (`*.bak`) and reports per-store change counts
 
 ### What it does NOT touch
 
+- `agents.defaults.models` allowlist (left unchanged — never clobbered)
+- `agents.defaults.model.fallbacks` (left as-is)
 - Claude Foreman skill (separate billing via Claude CLI)
-- Fallback config (leaves `agents.defaults.model.fallbacks` as-is)
-- Historical error messages in cron job state
 - Memory files, daily logs, or any workspace content
+
+### Scope
+
+- Default: **every** agent under `agents/` (true fleet-wide switch)
+- `--agent NAME`: limit to one agent's session store
 
 ### Examples
 
 ```bash
-# Switch everything to haiku (cheapest)
-exec scripts/switch.sh haiku
-
-# Switch everything to sonnet
-exec scripts/switch.sh sonnet
-
-# Switch everything to opus (expensive — confirm with user first)
+# Switch the whole fleet to opus (resolves to claude-cli/claude-opus-4-8)
 exec scripts/switch.sh opus
 
-# Switch everything to GPT-5.4 lane
-exec scripts/switch.sh gpt-5.4
+# Any provider, by alias
+exec scripts/switch.sh minimax            # -> venice/minimax-m25
+exec scripts/switch.sh grok-4.3           # -> openrouter/x-ai/grok-4.3
 
-# Switch everything to GPT-5.5 lane
-exec scripts/switch.sh gpt-5.5
+# Full id, agnostic passthrough
+exec scripts/switch.sh anthropic/claude-opus-4-8
 
-# Switch everything to codex-spark lane
-exec scripts/switch.sh spark
-```
+# Only the mainelobster agent
+exec scripts/switch.sh sonnet --agent mainelobster
 
-### Dry run
-
-Add `--dry-run` to preview changes without writing:
-
-```bash
-exec scripts/switch.sh sonnet --dry-run
+# Preview without writing
+exec scripts/switch.sh opus --dry-run
 ```
 
 ## Notes
 
 - A gateway restart may be needed for config changes to take effect
-- Existing active sessions will pick up the new model on their next turn
-- The models allowlist is updated to include only the target model
+- Active sessions pick up the new model on their next turn
+- `--crons` targets the legacy `cron/jobs.json`; the cron store format has since
+  migrated, so cron mutation may be a no-op until updated separately
