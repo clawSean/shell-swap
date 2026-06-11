@@ -176,7 +176,11 @@ fi
 echo ""
 echo "=== pre-flight (validating JSON) ==="
 preflight_ok=1
-python3 - "$CONFIG" "${STORES[@]}" <<'PYEOF' || preflight_ok=0
+PREFLIGHT_FILES=("$CONFIG" "${STORES[@]}")
+if [[ "$TOUCH_CRONS" -eq 1 && -f "$CRON" ]]; then
+  PREFLIGHT_FILES+=("$CRON")
+fi
+python3 - "${PREFLIGHT_FILES[@]}" <<'PYEOF' || preflight_ok=0
 import json, sys
 bad = []
 for p in sys.argv[1:]:
@@ -198,10 +202,16 @@ write_atomic_py='
 import json, os, tempfile
 def write_atomic(path, data):
     d = os.path.dirname(path) or "."
+    try:
+        mode = os.stat(path).st_mode & 0o777
+    except OSError:
+        mode = None
     fd, tmp = tempfile.mkstemp(dir=d, prefix=".shellswap-", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as f:
             json.dump(data, f, indent=2)
+        if mode is not None:
+            os.chmod(tmp, mode)  # mkstemp is 0600; preserve original perms
         os.replace(tmp, path)
     except BaseException:
         try: os.unlink(tmp)
@@ -276,7 +286,13 @@ for s in entries:
     if isinstance(mo, str) and mo != model_id:
         s["modelOverride"] = model_id; c["override"] += 1; model_changed = True
     # Repair provider on any session now on the target model (fixes divergence
-    # even where the model field was already correct).
+    # even where the model field was already correct). Note: "on target" is
+    # judged by model id, so when two providers share a model id (e.g.
+    # claude-sonnet-4-6 under both venice and claude-cli), a fleet switch to one
+    # re-homes the other's provider to the target. That's intended — a fleet
+    # switch means "everyone on THIS provider+model" — but it does mean a
+    # session deliberately on venice/claude-sonnet-4-6 moves to the target
+    # provider when you switch to a different claude-sonnet-4-6 lane.
     on_target = (s.get("model") == model_id) or (s.get("modelOverride") == model_id)
     if on_target:
         for pf in ("modelProvider", "providerOverride"):

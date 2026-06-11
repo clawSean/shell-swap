@@ -159,7 +159,8 @@ rm -rf "$ROOT"
 # ---------------------------------------------------------------------------
 echo "== scoping =="
 ROOT="$(mktemp -d)"; make_fixture "$ROOT"
-run sonnet-nonexistent-alias --agent mainelobster --dry-run >/dev/null 2>&1 || true
+run bogus-alias-xyz --agent mainelobster --dry-run >/dev/null 2>&1
+assert_exit "bogus alias rejected before agent handling" 3 "$?"
 run opus --agent mainelobster >/dev/null
 assert_eq "scoped run leaves config primary" "openai/gpt-5.5" "$(jget "$ROOT/openclaw.json" "['agents']['defaults']['model']['primary']")"
 assert_eq "scoped run switched target agent" "claude-opus-4-8" "$(jget "$ROOT/agents/mainelobster/sessions/sessions.json" "['agent:mainelobster:s1']['model']")"
@@ -181,6 +182,36 @@ ROOT="$(mktemp -d)"; make_fixture "$ROOT"
 run opus >/dev/null
 assert_eq "fleet run updates config primary" "claude-cli/claude-opus-4-8" "$(jget "$ROOT/openclaw.json" "['agents']['defaults']['model']['primary']")"
 assert_eq "allowlist NOT clobbered (still 8 entries)" "8" "$(jget "$ROOT/openclaw.json" "['agents']['defaults']['models'].__len__()")"
+rm -rf "$ROOT"
+
+# ---------------------------------------------------------------------------
+echo "== cron (opt-in) =="
+ROOT="$(mktemp -d)"; make_fixture "$ROOT"
+mkdir -p "$ROOT/cron"
+cat > "$ROOT/cron/jobs.json" <<'JSON'
+{ "jobs": [
+  { "name": "daily-digest", "payload": { "model": "gpt-5.5" } },
+  { "name": "already-target", "payload": { "model": "claude-cli/claude-opus-4-8" } }
+] }
+JSON
+run opus --crons >/dev/null
+assert_eq "cron payload rewritten to full id" "claude-cli/claude-opus-4-8" "$(jget "$ROOT/cron/jobs.json" "['jobs'][0]['payload']['model']")"
+[[ -f "$ROOT/cron/jobs.json.bak" ]] && ok "cron backup created" || bad "cron backup created"
+rm -rf "$ROOT"
+
+# without --crons the cron file is untouched
+ROOT="$(mktemp -d)"; make_fixture "$ROOT"; mkdir -p "$ROOT/cron"
+echo '{ "jobs": [ { "name": "j", "payload": { "model": "gpt-5.5" } } ] }' > "$ROOT/cron/jobs.json"
+run opus >/dev/null
+assert_eq "cron untouched without --crons" "gpt-5.5" "$(jget "$ROOT/cron/jobs.json" "['jobs'][0]['payload']['model']")"
+rm -rf "$ROOT"
+
+# malformed cron with --crons must abort in pre-flight BEFORE any write
+ROOT="$(mktemp -d)"; make_fixture "$ROOT"; mkdir -p "$ROOT/cron"
+echo '{ broken cron' > "$ROOT/cron/jobs.json"
+run opus --crons >/dev/null 2>&1; assert_exit "malformed cron aborts (exit 5)" 5 "$?"
+assert_eq "cron-abort left config primary unchanged" "openai/gpt-5.5" "$(jget "$ROOT/openclaw.json" "['agents']['defaults']['model']['primary']")"
+assert_eq "cron-abort left sessions unchanged" "gpt-5.5" "$(jget "$ROOT/agents/mainelobster/sessions/sessions.json" "['agent:mainelobster:s1']['model']")"
 rm -rf "$ROOT"
 
 # ---------------------------------------------------------------------------
