@@ -44,6 +44,7 @@ make_fixture() {
         "claude-cli/claude-opus-4-8": { "alias": "opus", "agentRuntime": { "id": "claude-cli" } },
         "anthropic/claude-opus-4-6": { "alias": "opus-4.6", "agentRuntime": { "id": "claude-cli" } },
         "anthropic/claude-opus-4-8": { "alias": "opus-8", "agentRuntime": { "id": "openclaw" } },
+        "openai/gpt-5.5-codex": { "alias": "gpt-codex", "agentRuntime": { "id": "codex" } },
         "venice/minimax-m25": { "alias": "minimax" },
         "nvidia/moonshotai/kimi-k2.5": { "alias": "kimi" },
         "xai/grok-4.3": { "alias": "Grok" },
@@ -79,6 +80,10 @@ JSON
   },
   "agent:mainelobster:s5_ontarget": {
     "model": "claude-opus-4-8", "modelProvider": "claude-cli", "modelOverrideSource": "user"
+  },
+  "agent:mainelobster:s6_codexpin": {
+    "model": "gpt-5.5", "modelProvider": "openai", "modelOverrideSource": "user",
+    "agentHarnessId": "codex", "agentRuntimeOverride": "codex", "liveModelSwitchPending": true
   }
 }
 JSON
@@ -157,6 +162,28 @@ assert_eq "s4 all stale fallback fields gone" "False" "$hasstale"
 rm -rf "$ROOT"
 
 # ---------------------------------------------------------------------------
+echo "== harness/runtime pin clearing (codex deadlock fix) =="
+# Switching a codex-pinned session to a non-codex lane must DELETE the stale
+# agentHarnessId / agentRuntimeOverride / liveModelSwitchPending pins, else the
+# session keeps routing to the dead codex harness and deadlocks.
+ROOT="$(mktemp -d)"; make_fixture "$ROOT"; S="$ROOT/agents/mainelobster/sessions/sessions.json"
+run opus >/dev/null
+assert_eq "codex->claude clears agentHarnessId"        "None" "$(jget "$S" ".get('agent:mainelobster:s6_codexpin',{}).get('agentHarnessId','None')")"
+assert_eq "codex->claude clears agentRuntimeOverride"  "None" "$(jget "$S" ".get('agent:mainelobster:s6_codexpin',{}).get('agentRuntimeOverride','None')")"
+assert_eq "codex->claude clears liveModelSwitchPending" "None" "$(jget "$S" ".get('agent:mainelobster:s6_codexpin',{}).get('liveModelSwitchPending','None')")"
+assert_eq "codex->claude switched model"               "claude-opus-4-8" "$(jget "$S" "['agent:mainelobster:s6_codexpin']['model']")"
+rm -rf "$ROOT"
+
+# Switching INTO a codex lane (provider resolves to agentRuntime.id "codex")
+# must KEEP the harness pin (it's valid there) but still resolve the pending
+# live-switch flag, since file-surgery hard-sets the model.
+ROOT="$(mktemp -d)"; make_fixture "$ROOT"; S="$ROOT/agents/mainelobster/sessions/sessions.json"
+run gpt-codex >/dev/null
+assert_eq "->codex keeps agentHarnessId"               "codex" "$(jget "$S" ".get('agent:mainelobster:s6_codexpin',{}).get('agentHarnessId','None')")"
+assert_eq "->codex still clears liveModelSwitchPending" "None"  "$(jget "$S" ".get('agent:mainelobster:s6_codexpin',{}).get('liveModelSwitchPending','None')")"
+rm -rf "$ROOT"
+
+# ---------------------------------------------------------------------------
 echo "== scoping =="
 ROOT="$(mktemp -d)"; make_fixture "$ROOT"
 run bogus-alias-xyz --agent mainelobster --dry-run >/dev/null 2>&1
@@ -181,7 +208,7 @@ echo "== fleet run updates primary =="
 ROOT="$(mktemp -d)"; make_fixture "$ROOT"
 run opus >/dev/null
 assert_eq "fleet run updates config primary" "claude-cli/claude-opus-4-8" "$(jget "$ROOT/openclaw.json" "['agents']['defaults']['model']['primary']")"
-assert_eq "allowlist NOT clobbered (still 8 entries)" "8" "$(jget "$ROOT/openclaw.json" "['agents']['defaults']['models'].__len__()")"
+assert_eq "allowlist NOT clobbered (still 9 entries)" "9" "$(jget "$ROOT/openclaw.json" "['agents']['defaults']['models'].__len__()")"
 rm -rf "$ROOT"
 
 # ---------------------------------------------------------------------------

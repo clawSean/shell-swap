@@ -268,7 +268,7 @@ stale_fallback_fields = (
     "modelOverrideFallbackOriginModel",
     "modelOverrideFallbackNotice",
 )
-c = {"model": 0, "override": 0, "provider": 0, "source": 0, "stale": 0, "autoSkipped": 0}
+c = {"model": 0, "override": 0, "provider": 0, "source": 0, "stale": 0, "pinCleared": 0, "autoSkipped": 0}
 
 # Store schema: { sessionKey: sessionDict }. Only touch direct keys.
 entries = data.values() if isinstance(data, dict) else []
@@ -306,13 +306,30 @@ for s in entries:
         for fld in stale_fallback_fields:
             if fld in s:
                 del s[fld]; c["stale"] += 1
+        # Clear stale harness/runtime pins so routing can't deadlock on a dead
+        # harness. The codex-out-of-quota bug: a session pinned to
+        # agentHarnessId:"codex" keeps hitting the codex harness even after its
+        # model is switched, and liveModelSwitchPending only clears on a
+        # *successful* turn that never comes (codex is out of quota) -> deadlock.
+        # File-surgery hard-sets the model, so any pending live switch is already
+        # resolved; and a harness/runtime pin is only valid when we're switching
+        # INTO that explicit-runtime lane (provider == agentRuntime.id, e.g.
+        # "codex"). Healthy sessions carry no pin and re-derive the harness from
+        # the model, so removing these is safe for normal model-derived runtimes.
+        if s.pop("liveModelSwitchPending", None) is not None:
+            c["pinCleared"] += 1
+        if provider != "codex":
+            for pin in ("agentHarnessId", "agentRuntimeOverride"):
+                if s.pop(pin, None) is not None:
+                    c["pinCleared"] += 1
 
-total = c["model"] + c["override"] + c["provider"] + c["source"] + c["stale"]
+total = c["model"] + c["override"] + c["provider"] + c["source"] + c["stale"] + c["pinCleared"]
 if not dry and total:
     write_atomic(path, data)
 print(f"  {path}")
 print(f"    model={c['model']} modelOverride={c['override']} provider={c['provider']} "
-      f"source={c['source']} staleRemoved={c['stale']} autoSkipped={c['autoSkipped']}")
+      f"source={c['source']} staleRemoved={c['stale']} pinCleared={c['pinCleared']} "
+      f"autoSkipped={c['autoSkipped']}")
 PYEOF
 }
 

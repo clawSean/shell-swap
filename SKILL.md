@@ -39,6 +39,13 @@ full `provider/model` id instead.
    - sets `modelProvider` and `providerOverride` → the resolved provider
    - sets `modelOverrideSource` → `user`
    - removes stale fallback origin/notice fields
+   - clears stale runtime/harness pins (`agentHarnessId`,
+     `agentRuntimeOverride`, `liveModelSwitchPending`) on any session whose model
+     it switches **out of** a codex lane — otherwise a session pinned to
+     `agentHarnessId: "codex"` keeps routing to the dead codex harness and
+     deadlocks (the pin only clears on a successful turn that never comes). Pins
+     are preserved when switching **into** a codex lane (provider resolves to
+     `agentRuntime.id == "codex"`).
    - model and provider are stamped **together**, so they can never diverge
 3. Optionally (`--crons`) rewrites `payload.model` in a legacy `cron/jobs.json`
 4. Backs up each modified file (`*.bak`) and reports per-store change counts
@@ -97,7 +104,25 @@ exec scripts/switch.sh opus --dry-run
   covering resolution, agentRuntime provider, the schema-scoped walk, `auto`
   preservation, divergence repair, provenance, scoping, atomicity, backups,
   pre-validation, and dry-run. Run it before changing the script.
-- A gateway restart may be needed for config changes to take effect; active
-  sessions pick up the new model on their next turn.
+- **Restart scope (warm vs cold):** file-surgery edits the on-disk store. A
+  **cold** session (a persisted row not currently loaded in the gateway's
+  memory) reads the new override when it next hydrates — no restart. A **warm**
+  session (held in gateway memory) keeps its in-memory copy and can rewrite the
+  file, so a config-primary change or warm-session switch may need a gateway
+  restart to take effect. Cold sessions are the easy case; warm sessions are the
+  reason a restart is sometimes required.
+- **When to prefer the native path instead:** for a single session or a live
+  switch with **no restart**, use the gateway-native surfaces — `/model`, the
+  model picker, `session_status(model=…)`, or `sessions.patch`. They write the
+  same `modelOverrideSource: "user"` override through the gateway, update warm
+  in-memory state correctly, and let the gateway resolve/clear the effective
+  `agentRuntime` itself (so they don't hit the codex-pin deadlock at all). The
+  only thing they **don't** do is set `agents.defaults.model.primary` (the
+  default for brand-new sessions) — that's `openclaw models set <provider/model>`
+  or a config patch. Live switches apply at the next clean retry / next turn,
+  never mid-run. shell-swap's niche is the **bulk** case: rewriting many sessions
+  (300+) + the config default in one shot from bash, including when the gateway
+  is down — `sessions.patch` has no bash CLI, so this script stays the fleet
+  tool.
 - `--crons` targets the legacy `cron/jobs.json`; the cron store format has since
   migrated, so cron mutation may be a no-op until updated separately
