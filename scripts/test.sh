@@ -60,6 +60,7 @@ JSON
 {
   "agent:mainelobster:s1": {
     "model": "gpt-5.5", "modelProvider": "openai", "modelOverrideSource": "auto",
+    "thinkingLevel": "off", "fastMode": false,
     "systemPromptReport": { "model": "gpt-5.5", "provider": "openai" },
     "contextBudgetStatus": { "model": "gpt-5.5" },
     "origin": { "provider": "telegram" }
@@ -67,7 +68,7 @@ JSON
   "agent:mainelobster:s2_diverged": {
     "model": "claude-opus-4-8", "modelProvider": "anthropic",
     "modelOverride": "claude-opus-4-8", "providerOverride": "anthropic",
-    "modelOverrideSource": "user"
+    "modelOverrideSource": "user", "thinkingLevel": "high"
   },
   "agent:mainelobster:s3_auto": {
     "model": "auto", "modelProvider": "nadirclaw"
@@ -90,7 +91,7 @@ JSON
 
   cat > "$root/agents/clawdia/sessions/sessions.json" <<'JSON'
 {
-  "agent:clawdia:s1": { "model": "gpt-5.5", "modelProvider": "openai", "modelOverrideSource": "auto" }
+  "agent:clawdia:s1": { "model": "gpt-5.5", "modelProvider": "openai", "modelOverrideSource": "auto", "thinkingLevel": "low" }
 }
 JSON
 
@@ -127,6 +128,8 @@ assert_contains "cross-provider alias (venice)" "Session provider  : venice" "$o
 
 run gpt-5.5 --dry-run >/dev/null 2>&1; assert_exit "bare model rejected" 3 "$?"
 run anything/at-all-novel --dry-run >/dev/null 2>&1; assert_exit "novel provider/model passes (exit 0)" 0 "$?"
+run --think big --dry-run >/dev/null 2>&1; assert_exit "invalid think rejected" 1 "$?"
+run --fast turbo --dry-run >/dev/null 2>&1; assert_exit "invalid fast rejected" 1 "$?"
 rm -rf "$ROOT"
 
 # ---------------------------------------------------------------------------
@@ -267,6 +270,41 @@ run opus --dry-run >/dev/null
 after="$(md5sum "$ROOT/openclaw.json" "$ROOT/agents/mainelobster/sessions/sessions.json")"
 assert_eq "dry-run modifies nothing" "$before" "$after"
 [[ -f "$ROOT/openclaw.json.bak" ]] && bad "dry-run must not write backups" || ok "dry-run writes no backups"
+rm -rf "$ROOT"
+
+# ---------------------------------------------------------------------------
+echo "== session override modes =="
+ROOT="$(mktemp -d)"; make_fixture "$ROOT"
+S="$ROOT/agents/mainelobster/sessions/sessions.json"
+CS="$ROOT/agents/clawdia/sessions/sessions.json"
+run --think high --fast auto --session-mode offline >/dev/null
+assert_eq "mode-only does not change config primary" "openai/gpt-5.5" "$(jget "$ROOT/openclaw.json" "['agents']['defaults']['model']['primary']")"
+assert_eq "offline think set target agent" "high" "$(jget "$S" "['agent:mainelobster:s1']['thinkingLevel']")"
+assert_eq "offline fast auto set" "auto" "$(jget "$S" "['agent:mainelobster:s1']['fastMode']")"
+assert_eq "offline think set other agent by default" "high" "$(jget "$CS" "['agent:clawdia:s1']['thinkingLevel']")"
+rm -rf "$ROOT"
+
+ROOT="$(mktemp -d)"; make_fixture "$ROOT"
+S="$ROOT/agents/mainelobster/sessions/sessions.json"
+CS="$ROOT/agents/clawdia/sessions/sessions.json"
+run --think default --fast default --agent mainelobster --session-mode offline >/dev/null
+assert_eq "default clears thinking override" "None" "$(jget "$S" ".get('agent:mainelobster:s1',{}).get('thinkingLevel','None')")"
+assert_eq "default clears fast override" "None" "$(jget "$S" ".get('agent:mainelobster:s1',{}).get('fastMode','None')")"
+assert_eq "scoped override leaves other agent alone" "low" "$(jget "$CS" "['agent:clawdia:s1']['thinkingLevel']")"
+rm -rf "$ROOT"
+
+ROOT="$(mktemp -d)"; make_fixture "$ROOT"
+out="$(run --think max --dry-run)"
+assert_contains "gateway dry-run used for warm-safe mode" "would patch 7 session(s) through Gateway sessions.patch" "$out"
+assert_eq "gateway dry-run leaves config primary" "openai/gpt-5.5" "$(jget "$ROOT/openclaw.json" "['agents']['defaults']['model']['primary']")"
+rm -rf "$ROOT"
+
+ROOT="$(mktemp -d)"; make_fixture "$ROOT"
+S="$ROOT/agents/mainelobster/sessions/sessions.json"
+run opus --think x-high --fast on --agent mainelobster --session-mode offline >/dev/null
+assert_eq "model+think normalized x-high" "xhigh" "$(jget "$S" "['agent:mainelobster:s1']['thinkingLevel']")"
+assert_eq "model+fast normalized on" "True" "$(jget "$S" "['agent:mainelobster:s1']['fastMode']")"
+assert_eq "model still switched with overrides" "claude-opus-4-8" "$(jget "$S" "['agent:mainelobster:s1']['model']")"
 rm -rf "$ROOT"
 
 # missing config

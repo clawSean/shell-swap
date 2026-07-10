@@ -19,6 +19,8 @@ knows about (Anthropic, OpenAI, Venice, xAI, OpenRouter, NVIDIA, Ollama, …).
 
 ```bash
 exec scripts/switch.sh <target> [--agent NAME] [--all-agents] [--crons] [--dry-run]
+exec scripts/switch.sh --think LEVEL [--fast MODE] [--agent NAME] [--dry-run]
+exec scripts/switch.sh --fast MODE [--agent NAME] [--dry-run]
 ```
 
 `<target>` may be:
@@ -31,9 +33,21 @@ model can map to multiple providers (e.g. `claude-fable-5` → `claude-work`,
 `claude-cli`, or `anthropic`), so the provider can't be guessed safely. Pass the
 full `provider/model` id instead.
 
+Session override flags:
+- `--think LEVEL` sets or clears direct session `thinkingLevel` overrides.
+  Levels: `off|minimal|low|medium|high|xhigh|adaptive|max|default`.
+  `default` clears the session override so config/provider defaults win.
+- `--fast MODE` sets or clears direct session `fastMode` overrides.
+  Modes: `on|off|auto|default`. `default` clears the session override.
+- `--session-mode gateway|offline` controls how `--think` / `--fast` are
+  written. Default is `gateway`, which calls Gateway `sessions.patch` and
+  updates warm in-memory sessions without a restart. `offline` edits
+  `sessions.json` directly and is for maintenance when Gateway is down.
+
 ### What it does
 
-1. Updates `agents.defaults.model.primary` in `openclaw.json` to the full id
+1. When a model target is provided, updates `agents.defaults.model.primary` in
+   `openclaw.json` to the full id
 2. For every agent session store (`agents/*/sessions/sessions.json`):
    - sets `model` and `modelOverride` → the resolved model id
    - sets `modelProvider` and `providerOverride` → the resolved provider
@@ -47,13 +61,22 @@ full `provider/model` id instead.
      are preserved when switching **into** a codex lane (provider resolves to
      `agentRuntime.id == "codex"`).
    - model and provider are stamped **together**, so they can never diverge
-3. Optionally (`--crons`) rewrites `payload.model` in a legacy `cron/jobs.json`
-4. Backs up each modified file (`*.bak`) and reports per-store change counts
+3. When `--think` / `--fast` is provided:
+   - default `gateway` mode patches every selected session through Gateway
+     `sessions.patch` so warm sessions update without restart
+   - `offline` mode edits direct session-entry fields in `sessions.json`
+   - invalid provider/model combinations are rejected by Gateway in warm-safe
+     mode and reported; those sessions are left unchanged
+4. Optionally (`--crons`) rewrites `payload.model` in a legacy `cron/jobs.json`
+5. Backs up each modified file (`*.bak`) and reports per-store change counts
 
 ### What it does NOT touch
 
 - `agents.defaults.models` allowlist (left unchanged — never clobbered)
 - `agents.defaults.model.fallbacks` (left as-is)
+- global/per-agent thinking or fast defaults (`agents.defaults.thinkingDefault`,
+  `agents.list[].thinkingDefault`, `agents.list[].fastModeDefault`)
+- per-model fast defaults (`agents.defaults.models[*].params.fastMode`)
 - Claude Foreman skill (separate billing via Claude CLI)
 - Memory files, daily logs, or any workspace content
 
@@ -80,6 +103,18 @@ exec scripts/switch.sh sonnet --agent mainelobster
 
 # Preview without writing
 exec scripts/switch.sh opus --dry-run
+
+# Set every selected session's thinking override, warm-safe/no restart
+exec scripts/switch.sh --think high
+
+# Mode-only run: set fast auto without changing model
+exec scripts/switch.sh --fast auto
+
+# Clear direct session overrides so config/provider defaults win
+exec scripts/switch.sh --think default --fast default
+
+# Maintenance mode when Gateway is down (direct file edit)
+exec scripts/switch.sh --think off --session-mode offline
 ```
 
 ## Notes
@@ -100,10 +135,18 @@ exec scripts/switch.sh opus --dry-run
   leaves the global config primary unchanged; an unknown agent name aborts with
   no changes. `--agent current` (or `--current-agent`) targets the active agent
   via `OPENCLAW_MCP_AGENT_ID`.
-- **Tests:** `bash scripts/test.sh` runs a hermetic regression suite (44 checks)
+- **Tests:** `bash scripts/test.sh` runs a hermetic regression suite
   covering resolution, agentRuntime provider, the schema-scoped walk, `auto`
   preservation, divergence repair, provenance, scoping, atomicity, backups,
-  pre-validation, and dry-run. Run it before changing the script.
+  pre-validation, dry-run, and session override modes. Run it before changing
+  the script.
+- **Thinking compatibility:** Gateway `sessions.patch` validates the selected
+  level against the session's effective provider/model profile. For example,
+  `--think max` can be rejected on an OpenAI session whose current profile only
+  supports `off|minimal|low|medium|high|xhigh`; shell-swap reports that failure
+  and leaves that session unchanged. Existing stored unsupported levels may be
+  remapped by OpenClaw at runtime, but the warm-safe Gateway path does not force
+  invalid values into live sessions.
 - **Restart scope (warm vs cold):** file-surgery edits the on-disk store. A
   **cold** session (a persisted row not currently loaded in the gateway's
   memory) reads the new override when it next hydrates — no restart. A **warm**
@@ -122,7 +165,7 @@ exec scripts/switch.sh opus --dry-run
   or a config patch. Live switches apply at the next clean retry / next turn,
   never mid-run. shell-swap's niche is the **bulk** case: rewriting many sessions
   (300+) + the config default in one shot from bash, including when the gateway
-  is down — `sessions.patch` has no bash CLI, so this script stays the fleet
-  tool.
+  is down, and using Gateway `sessions.patch` in a loop for warm-safe bulk
+  thinking/fast overrides.
 - `--crons` targets the legacy `cron/jobs.json`; the cron store format has since
   migrated, so cron mutation may be a no-op until updated separately
