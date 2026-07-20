@@ -29,7 +29,7 @@ map to multiple providers, so the provider can't be guessed.
 ```bash
 exec scripts/switch.sh opus --dry-run
 exec scripts/switch.sh anthropic/claude-opus-4-8
-exec scripts/switch.sh minimax --agent mainelobster
+exec scripts/switch.sh minimax --agent <your-agent>
 exec scripts/switch.sh --think high
 exec scripts/switch.sh --fast auto
 exec scripts/switch.sh --think default --fast default

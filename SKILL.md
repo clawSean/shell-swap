@@ -1,10 +1,6 @@
 ---
 name: shell-swap
-description: >
-  Admin tool to mass-switch every OpenClaw session and the default model to ANY
-  provider/model. Provider- and model-agnostic. Use when asked to change model,
-  switch lanes, set the default model, do a fleet-wide model change, or
-  "shell swap".
+description: "Admin tool to mass-switch every OpenClaw session and the default model to ANY provider/model. Provider- and model-agnostic. Use when asked to change model, switch lanes, set the default model, do a fleet-wide model change, or \"shell swap\"."
 ---
 
 # Shell Swap
@@ -98,8 +94,8 @@ exec scripts/switch.sh grok-4.3           # -> openrouter/x-ai/grok-4.3
 # Full id, agnostic passthrough
 exec scripts/switch.sh anthropic/claude-opus-4-8
 
-# Only the mainelobster agent
-exec scripts/switch.sh sonnet --agent mainelobster
+# Only the <your-agent> agent
+exec scripts/switch.sh sonnet --agent <your-agent>
 
 # Preview without writing
 exec scripts/switch.sh opus --dry-run
