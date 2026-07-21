@@ -1,25 +1,26 @@
 ---
 name: shell-swap
-description: "Admin tool to mass-switch every OpenClaw session and the default model to ANY provider/model. Provider- and model-agnostic. Use when asked to change model, switch lanes, set the default model, do a fleet-wide model change, or \"shell swap\"."
+description: "Admin tool to safely unpin or mass-switch OpenClaw session models. Config mutation is explicit-only; default/reset uses Gateway model:null so configured fallbacks keep working without a restart."
 ---
 
 # Shell Swap
 
-Provider/model-**agnostic** mass model switch. Resolves the target against the
-**live config alias map** (`agents.defaults.models`) — the single source of
-truth — then stamps a consistent `{model, provider}` pair across config + every
-agent session store. No hardcoded alias table; works for any model the config
-knows about (Anthropic, OpenAI, Venice, xAI, OpenRouter, NVIDIA, Ollama, …).
+Provider/model-**agnostic** model administration. The safe default operation
+unpins sessions through Gateway so they inherit the configured primary and its
+fallback chain. Exact non-default hard pins remain available, but are explicit
+`source=user` selections and therefore disable configured model fallback.
 
 ## Usage
 
 ```bash
-exec scripts/switch.sh <target> [--agent NAME] [--all-agents] [--crons] [--dry-run]
+exec scripts/switch.sh <target> [--set-primary] [--agent NAME] [--all-agents] [--crons] [--dry-run]
 exec scripts/switch.sh --think LEVEL [--fast MODE] [--agent NAME] [--dry-run]
 exec scripts/switch.sh --fast MODE [--agent NAME] [--dry-run]
 ```
 
 `<target>` may be:
+- **default/reset/unpin** — call Gateway `sessions.patch` with `model:null` so
+  sessions inherit config and stale `liveModelSwitchPending` is removed
 - **alias** — any alias defined in `agents.defaults.models` (e.g. `opus`, `gpt`, `minimax`, `grok-4.3`, `kimi`)
 - **provider/model** — a full config key (e.g. `anthropic/claude-opus-4-8`, `venice/grok-4-20`)
 - **raw id** — any `provider/model` not yet in the allowlist (agnostic passthrough)
@@ -35,16 +36,21 @@ Session override flags:
   `default` clears the session override so config/provider defaults win.
 - `--fast MODE` sets or clears direct session `fastMode` overrides.
   Modes: `on|off|auto|default`. `default` clears the session override.
-- `--session-mode gateway|offline` controls how `--think` / `--fast` are
+- `--set-primary` explicitly changes `agents.defaults.model.primary`. Without
+  it, shell-swap does not modify `openclaw.json`.
+- `--session-mode gateway|offline` controls how reset / `--think` / `--fast` are
   written. Default is `gateway`, which calls Gateway `sessions.patch` and
   updates warm in-memory sessions without a restart. `offline` edits
   `sessions.json` directly and is for maintenance when Gateway is down.
 
 ### What it does
 
-1. When a model target is provided, updates `agents.defaults.model.primary` in
-   `openclaw.json` to the full id
-2. For every agent session store (`agents/*/sessions/sessions.json`):
+1. Leaves `openclaw.json` unchanged unless `--set-primary` is supplied.
+2. For `default`, or a target equal to the configured primary, calls Gateway
+   `sessions.patch {model:null}` for every idle selected session. This removes
+   model overrides, fallback-origin state, and `liveModelSwitchPending` without
+   a restart. Active sessions are deferred; rerun once they are idle.
+3. For an exact non-default target, updates every selected session store:
    - sets `model` and `modelOverride` → the resolved model id
    - sets `modelProvider` and `providerOverride` → the resolved provider
    - sets `modelOverrideSource` → `user`
@@ -57,14 +63,15 @@ Session override flags:
      are preserved when switching **into** a codex lane (provider resolves to
      `agentRuntime.id == "codex"`).
    - model and provider are stamped **together**, so they can never diverge
-3. When `--think` / `--fast` is provided:
+4. When `--think` / `--fast` is provided:
    - default `gateway` mode patches every selected session through Gateway
      `sessions.patch` so warm sessions update without restart
    - `offline` mode edits direct session-entry fields in `sessions.json`
    - invalid provider/model combinations are rejected by Gateway in warm-safe
      mode and reported; those sessions are left unchanged
-4. Optionally (`--crons`) rewrites `payload.model` in a legacy `cron/jobs.json`
-5. Backs up each modified file (`*.bak`) and reports per-store change counts
+5. Optionally (`--crons`) rewrites `payload.model` in a legacy `cron/jobs.json`
+   only for exact pins; reset/unpin does not create cron model pins.
+6. Backs up directly modified files (`*.bak`) and reports change counts.
 
 ### What it does NOT touch
 
@@ -86,6 +93,12 @@ Session override flags:
 ```bash
 # Switch the whole fleet to opus (resolves to claude-cli/claude-opus-4-8)
 exec scripts/switch.sh opus
+
+# Safely inherit the configured primary + fallbacks (no restart/config edit)
+exec scripts/switch.sh default
+
+# Explicitly change the configured primary, then unpin sessions to inherit it
+exec scripts/switch.sh opus --set-primary
 
 # Any provider, by alias
 exec scripts/switch.sh minimax            # -> venice/minimax-m25
@@ -131,11 +144,9 @@ exec scripts/switch.sh --think off --session-mode offline
   leaves the global config primary unchanged; an unknown agent name aborts with
   no changes. `--agent current` (or `--current-agent`) targets the active agent
   via `OPENCLAW_MCP_AGENT_ID`.
-- **Tests:** `bash scripts/test.sh` runs a hermetic regression suite
-  covering resolution, agentRuntime provider, the schema-scoped walk, `auto`
-  preservation, divergence repair, provenance, scoping, atomicity, backups,
-  pre-validation, dry-run, and session override modes. Run it before changing
-  the script.
+- **Tests:** `/opt/homebrew/bin/bash scripts/test.sh` runs a hermetic regression
+  suite covering no-config-by-default behavior, Gateway null-unpin, active-run
+  deferral, pending-flag cleanup, explicit config mutation, and offline safety.
 - **Thinking compatibility:** Gateway `sessions.patch` validates the selected
   level against the session's effective provider/model profile. For example,
   `--think max` can be rejected on an OpenAI session whose current profile only
@@ -143,13 +154,22 @@ exec scripts/switch.sh --think off --session-mode offline
   and leaves that session unchanged. Existing stored unsupported levels may be
   remapped by OpenClaw at runtime, but the warm-safe Gateway path does not force
   invalid values into live sessions.
-- **Restart scope (warm vs cold):** file-surgery edits the on-disk store. A
+- **Restart scope (warm vs cold):** Gateway reset via `model:null` updates warm
+  state and explicitly deletes pending live-switch state; idle sessions do not
+  require a restart. Active sessions are not patched because their later
+  snapshot merge could win the race; rerun after they become idle. File-surgery
+  edits the on-disk store. A
   **cold** session (a persisted row not currently loaded in the gateway's
   memory) reads the new override when it next hydrates — no restart. A **warm**
   session (held in gateway memory) keeps its in-memory copy and can rewrite the
   file, so a config-primary change or warm-session switch may need a gateway
   restart to take effect. Cold sessions are the easy case; warm sessions are the
   reason a restart is sometimes required.
+- **Pending semantics:** a non-null `sessions.patch` can set
+  `liveModelSwitchPending` even if the session is idle at patch time, and that
+  flag can fire on a later user turn. Shell-swap therefore uses the native
+  null-reset path for default-equivalent targets and never manufactures the
+  flag online. Offline reset may delete it only while Gateway is stopped.
 - **When to prefer the native path instead:** for a single session or a live
   switch with **no restart**, use the gateway-native surfaces — `/model`, the
   model picker, `session_status(model=…)`, or `sessions.patch`. They write the

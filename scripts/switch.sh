@@ -4,8 +4,9 @@
 # The target is resolved against the LIVE config alias map
 # (agents.defaults.models) — the single source of truth — so it never goes
 # stale and works for ANY provider/model the config knows about. The resolved
-# {model, provider} pair is stamped together across config + every session
-# store, so model and provider can never diverge (the bug that broke routing).
+# {model, provider} pair is stamped together for exact pins, while default
+# targets use Gateway model:null so sessions inherit config and fallbacks.
+# openclaw.json is only changed with explicit --set-primary.
 #
 # Provider is the resolved model entry's agentRuntime.id when set, otherwise the
 # first path segment of the config key. This matters: anthropic/claude-opus-4-6
@@ -13,7 +14,7 @@
 # not "anthropic". Deriving provider from the key prefix alone would re-create
 # the divergence bug.
 #
-# Usage: switch.sh [<alias|provider/model|full_id>] [--think LEVEL] [--fast MODE] [--agent NAME] [--all-agents] [--crons] [--dry-run]
+# Usage: switch.sh [<alias|provider/model|default>] [--set-primary] [--think LEVEL] [--fast MODE] [--agent NAME] [--all-agents] [--crons] [--dry-run]
 
 set -euo pipefail
 
@@ -25,11 +26,13 @@ AGENTS_DIR="${AGENTS_DIR:-$OPENCLAW_DIR/agents}"
 usage() {
   cat <<'EOF'
 Usage:
-  switch.sh <target> [--agent NAME] [--all-agents] [--crons] [--dry-run]
+  switch.sh <target> [--set-primary] [--agent NAME] [--all-agents] [--crons] [--dry-run]
   switch.sh --think LEVEL [--fast MODE] [--agent NAME] [--dry-run]
   switch.sh --fast MODE [--agent NAME] [--dry-run]
 
 <target> is resolved against the live config alias map and may be:
+  - default        : clear model/provider overrides through Gateway sessions.patch
+                     so sessions inherit the configured primary + fallback policy
   - alias          : any alias defined in agents.defaults.models (e.g. opus, gpt, minimax, grok-4.3)
   - provider/model : a full config key (e.g. anthropic/claude-opus-4-8, venice/grok-4-20)
   - raw id         : any "provider/model" not yet in config (agnostic passthrough)
@@ -38,19 +41,22 @@ Bare model names (no "/" and not a known alias) are rejected: the same model
 can map to multiple providers, so the provider cannot be guessed safely.
 
 Flags:
+  --set-primary  Explicitly update agents.defaults.model.primary in openclaw.json.
+                 Without this flag, shell-swap NEVER changes openclaw.json.
   --think LEVEL  Set the session thinking override on every selected session.
                  LEVEL: off|minimal|low|medium|high|xhigh|adaptive|max|default.
                  "default" clears the session override so config/provider defaults win.
   --fast MODE    Set the session fast-mode override on every selected session.
                  MODE: on|off|auto|default. "default" clears the session override.
   --session-mode MODE
-                 How --think/--fast are written: "gateway" (default; warm-session
-                 safe via sessions.patch) or "offline" (direct sessions.json repair).
+                 How reset/--think/--fast are written: "gateway" (default;
+                 warm-session safe via sessions.patch) or "offline" (direct
+                 sessions.json repair; only allowed while Gateway is stopped).
   --agent NAME   Only rewrite this agent's session store; leaves the global
                  config primary untouched (scoped switch). Errors on unknown agent.
                  Use "--agent current" for the active agent (OPENCLAW_MCP_AGENT_ID).
   --current-agent  Shorthand for "--agent current"
-  --all-agents   Rewrite every agent's session store + the config primary (default)
+  --all-agents   Rewrite every agent's session store (default)
   --crons        Also rewrite cron payload.model values, if a legacy cron/jobs.json exists
   --dry-run      Show what would change without writing files
   -h, --help     Show this help
@@ -66,11 +72,14 @@ THINK_MODE=""
 FAST_MODE_SET=0
 FAST_MODE=""
 SESSION_MODE="gateway"
+SET_PRIMARY=0
+RESET_MODEL=0
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --crons|-c) TOUCH_CRONS=1 ;;
+    --set-primary) SET_PRIMARY=1 ;;
     --think|--thinking|-t)
       shift
       [[ $# -gt 0 ]] || { echo "[shell-swap] --think requires a level" >&2; exit 1; }
@@ -116,6 +125,19 @@ case "$SESSION_MODE" in
   gateway|offline) ;;
   *) echo "[shell-swap] --session-mode must be gateway or offline, got '$SESSION_MODE'" >&2; exit 1 ;;
 esac
+
+case "$(printf '%s' "$TARGET" | tr '[:upper:]' '[:lower:]')" in
+  default|inherit|clear|reset|unpin) RESET_MODEL=1 ;;
+esac
+
+if [[ "$RESET_MODEL" -eq 1 && "$SET_PRIMARY" -eq 1 ]]; then
+  echo "[shell-swap] --set-primary cannot be combined with target '$TARGET'; pass an explicit model target." >&2
+  exit 1
+fi
+if [[ "$SET_PRIMARY" -eq 1 && -n "$AGENT_FILTER" ]]; then
+  echo "[shell-swap] --set-primary cannot be scoped with --agent; choose the fleet scope explicitly." >&2
+  exit 1
+fi
 
 normalize_think() {
   local key
@@ -167,8 +189,22 @@ fi
 
 # --- Resolve target -> canonical {full_id, provider, model_id} from LIVE config ---
 # provider = resolved entry's agentRuntime.id if set, else first path segment.
+CONFIG_PRIMARY="$(python3 - "$CONFIG" <<'PYEOF'
+import json, sys
+with open(sys.argv[1]) as f:
+    data = json.load(f)
+primary = data.get("agents", {}).get("defaults", {}).get("model", {}).get("primary")
+if not isinstance(primary, str) or not primary.strip():
+    sys.stderr.write("[shell-swap] agents.defaults.model.primary is missing or invalid\n")
+    sys.exit(2)
+print(primary.strip())
+PYEOF
+)" || exit $?
+
 if [[ -n "$TARGET" ]]; then
-  RESOLVED="$(python3 - "$CONFIG" "$TARGET" <<'PYEOF'
+  RESOLVE_TARGET="$TARGET"
+  [[ "$RESET_MODEL" -eq 1 ]] && RESOLVE_TARGET="$CONFIG_PRIMARY"
+  RESOLVED="$(python3 - "$CONFIG" "$RESOLVE_TARGET" <<'PYEOF'
 import json, sys
 
 config_path, target = sys.argv[1], sys.argv[2]
@@ -222,6 +258,14 @@ PYEOF
   FULL_ID="$(sed -n '1p' <<<"$RESOLVED")"
   PROVIDER="$(sed -n '2p' <<<"$RESOLVED")"
   MODEL_ID="$(sed -n '3p' <<<"$RESOLVED")"
+
+  # A global primary change is completed by unpinning sessions, not by writing
+  # redundant source=user overrides. Likewise, selecting the already-configured
+  # primary means "inherit default" unless the operator explicitly asks for an
+  # exact no-fallback pin.
+  if [[ "$SET_PRIMARY" -eq 1 || "$FULL_ID" == "$CONFIG_PRIMARY" ]]; then
+    RESET_MODEL=1
+  fi
 else
   FULL_ID=""
   PROVIDER=""
@@ -233,16 +277,23 @@ if [[ -n "$TARGET" ]]; then
   echo "[shell-swap] Resolved full id  : $FULL_ID"
   echo "[shell-swap] Session model     : $MODEL_ID"
   echo "[shell-swap] Session provider  : $PROVIDER"
+  echo "[shell-swap] Config primary    : $CONFIG_PRIMARY"
+  if [[ "$RESET_MODEL" -eq 1 ]]; then
+    echo "[shell-swap] Session action    : UNPIN via sessions.patch model:null"
+  else
+    echo "[shell-swap] Session action    : exact source=user pin (config fallbacks disabled)"
+  fi
 else
   echo "[shell-swap] Target input     : <none; session overrides only>"
 fi
 if [[ -n "$AGENT_FILTER" ]]; then
-  echo "[shell-swap] Agent scope       : $AGENT_FILTER (config primary NOT changed)"
+  echo "[shell-swap] Agent scope       : $AGENT_FILTER"
 elif [[ -z "$TARGET" ]]; then
   echo "[shell-swap] Agent scope       : ALL agents (session overrides only)"
 else
-  echo "[shell-swap] Agent scope       : ALL agents (+ config primary)"
+  echo "[shell-swap] Agent scope       : ALL agents"
 fi
+[[ "$SET_PRIMARY" -eq 1 ]] && echo "[shell-swap] Config mutation   : ENABLED (--set-primary)" || echo "[shell-swap] Config mutation   : disabled"
 if [[ "$THINK_MODE_SET" -eq 1 || "$FAST_MODE_SET" -eq 1 ]]; then
   [[ "$THINK_MODE_SET" -eq 1 ]] && echo "[shell-swap] Thinking override: $THINK_VALUE"
   [[ "$FAST_MODE_SET" -eq 1 ]] && echo "[shell-swap] Fast override    : $FAST_VALUE"
@@ -317,13 +368,13 @@ def write_atomic(path, data):
         raise
 '
 
-# --- 1. config: primary model only (skipped for scoped --agent runs) ---
+# --- 1. config: primary model only (explicit opt-in) ---
 echo ""
 echo "=== openclaw.json ==="
 if [[ -z "$TARGET" ]]; then
   echo "  skipped (no model target; session overrides only)"
-elif [[ -n "$AGENT_FILTER" ]]; then
-  echo "  skipped (scoped --agent run; primary left as-is)"
+elif [[ "$SET_PRIMARY" -eq 0 ]]; then
+  echo "  skipped (config changes require --set-primary)"
 else
   [[ "$DRY_RUN" -eq 0 ]] && cp "$CONFIG" "$CONFIG.bak"
   python3 - "$CONFIG" "$FULL_ID" "$DRY_RUN" <<PYEOF
@@ -379,12 +430,17 @@ for s in entries:
     if m == "auto" or s.get("modelOverride") == "auto":
         c["autoSkipped"] += 1
         continue
-    model_changed = False
-    if isinstance(m, str) and m != model_id:
-        s["model"] = model_id; c["model"] += 1; model_changed = True
+    model_changed = any((
+        s.get("model") != model_id,
+        s.get("modelOverride") != model_id,
+        s.get("modelProvider") != provider,
+        s.get("providerOverride") != provider,
+    ))
+    if s.get("model") != model_id:
+        s["model"] = model_id; c["model"] += 1
     mo = s.get("modelOverride")
-    if isinstance(mo, str) and mo != model_id:
-        s["modelOverride"] = model_id; c["override"] += 1; model_changed = True
+    if mo != model_id:
+        s["modelOverride"] = model_id; c["override"] += 1
     # Repair provider on any session now on the target model (fixes divergence
     # even where the model field was already correct). Note: "on target" is
     # judged by model id, so when two providers share a model id (e.g.
@@ -397,11 +453,11 @@ for s in entries:
     if on_target:
         for pf in ("modelProvider", "providerOverride"):
             v = s.get(pf)
-            if isinstance(v, str) and v != provider:
+            if v != provider:
                 s[pf] = provider; c["provider"] += 1
     # Provenance + stale cleanup only where we actively switched the model.
     if model_changed:
-        if isinstance(s.get("modelOverrideSource"), str) and s["modelOverrideSource"] != "user":
+        if s.get("modelOverrideSource") != "user":
             s["modelOverrideSource"] = "user"; c["source"] += 1
         for fld in stale_fallback_fields:
             if fld in s:
@@ -468,6 +524,125 @@ if not dry and total:
 print(f"  {path}")
 print(f"    thinkingSet={c['thinkSet']} thinkingCleared={c['thinkCleared']} fastSet={c['fastSet']} fastCleared={c['fastCleared']}")
 PYEOF
+}
+
+reset_models_offline() {
+  if openclaw gateway call health --json --timeout 3000 >/dev/null 2>&1; then
+    echo "[shell-swap] Refusing offline model reset while Gateway is running. Use gateway mode, or stop Gateway first." >&2
+    return 8
+  fi
+  for sessions_file in "${STORES[@]}"; do
+    [[ "$DRY_RUN" -eq 0 ]] && cp "$sessions_file" "$sessions_file.bak"
+    python3 - "$sessions_file" "$DRY_RUN" <<PYEOF
+$write_atomic_py
+import json, sys
+path, dry = sys.argv[1], sys.argv[2] == "1"
+with open(path) as f:
+    data = json.load(f)
+fields = (
+    "providerOverride", "modelOverride", "modelOverrideSource",
+    "modelOverrideFallbackOriginProvider", "modelOverrideFallbackOriginModel",
+    "modelOverrideFallbackNotice", "fallbackNoticeSelectedModel",
+    "fallbackNoticeActiveModel", "fallbackNoticeReason",
+    "liveModelSwitchPending", "model", "modelProvider", "contextTokens",
+    "contextBudgetStatus",
+)
+changed = 0
+for entry in data.values() if isinstance(data, dict) else []:
+    if not isinstance(entry, dict):
+        continue
+    for field in fields:
+        if field in entry:
+            del entry[field]
+            changed += 1
+if not dry and changed:
+    write_atomic(path, data)
+print(f"  {path}: cleared {changed} model-selection field(s)")
+PYEOF
+  done
+  echo "[shell-swap] Offline reset complete. Restart Gateway before accepting traffic."
+}
+
+patch_model_reset_gateway() {
+  local list_out
+  if ! list_out="$(openclaw gateway call sessions.list --params '{"limit":1000,"includeGlobal":true}' --json --timeout 10000 2>&1)"; then
+    echo "[shell-swap] Cannot query Gateway session activity: $list_out" >&2
+    return 7
+  fi
+  local active_keys
+  active_keys="$(python3 -c 'import json,sys; d=json.load(sys.stdin); print("\n".join(s["key"] for s in d.get("sessions",[]) if s.get("hasActiveRun") is True and isinstance(s.get("key"),str)))' <<<"$list_out")"
+  local attempted=0 ok=0 failed=0 deferred=0
+  local failure_log=""
+
+  while IFS= read -r key; do
+    [[ -n "$key" ]] || continue
+    if grep -Fqx -- "$key" <<<"$active_keys"; then
+      deferred=$((deferred + 1))
+      failure_log="${failure_log}    ${key}: active run; deferred (rerun when idle)"$'\n'
+      continue
+    fi
+    attempted=$((attempted + 1))
+    if [[ "$DRY_RUN" -eq 1 ]]; then
+      ok=$((ok + 1))
+      continue
+    fi
+    local params out
+    params="$(python3 -c 'import json,sys; print(json.dumps({"key":sys.argv[1],"model":None},separators=(",",":")))' "$key")"
+    if out="$(openclaw gateway call sessions.patch --params "$params" --json --timeout 10000 2>&1)" &&
+       python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("ok") else 1)' <<<"$out" 2>/dev/null; then
+      ok=$((ok + 1))
+    else
+      failed=$((failed + 1))
+      failure_log="${failure_log}    ${key}: ${out}"$'\n'
+    fi
+  done < <(python3 - "${STORES[@]}" <<'PYEOF'
+import json, sys
+for path in sys.argv[1:]:
+    with open(path) as f:
+        data = json.load(f)
+    if isinstance(data, dict):
+        for key in data:
+            print(key)
+PYEOF
+)
+
+  echo "  sessions.patch model:null attempted=$attempted ok=$ok failed=$failed deferred=$deferred"
+  if [[ "$DRY_RUN" -eq 0 && "$failed" -eq 0 && "$deferred" -eq 0 ]]; then
+    local verify_out
+    if ! verify_out="$(python3 - "${STORES[@]}" <<'PYEOF'
+import json, sys
+bad_fields = (
+    "providerOverride", "modelOverride", "modelOverrideSource",
+    "modelOverrideFallbackOriginProvider", "modelOverrideFallbackOriginModel",
+    "liveModelSwitchPending",
+)
+bad = []
+for path in sys.argv[1:]:
+    with open(path) as f:
+        data = json.load(f)
+    for key, entry in data.items() if isinstance(data, dict) else []:
+        if not isinstance(entry, dict):
+            continue
+        leftovers = [field for field in bad_fields if field in entry]
+        if leftovers:
+            bad.append(f"{key}: {','.join(leftovers)}")
+if bad:
+    print("\n".join(bad))
+    sys.exit(1)
+print("verified selected session stores")
+PYEOF
+)"; then
+      failed=$((failed + 1))
+      failure_log="${failure_log}    postcondition failed: ${verify_out}"$'\n'
+    else
+      echo "  postcondition: $verify_out"
+    fi
+  fi
+  if [[ "$failed" -gt 0 || "$deferred" -gt 0 ]]; then
+    printf '%s' "$failure_log" | sed -n '1,25p'
+    echo "[shell-swap] Reset incomplete; no active session was mutated. Rerun after deferred sessions become idle." >&2
+    return 7
+  fi
 }
 
 patch_session_overrides_gateway() {
@@ -554,9 +729,18 @@ PYEOF
 echo ""
 echo "=== sessions ==="
 if [[ -n "$TARGET" ]]; then
-  for store in "${STORES[@]}"; do
-    rewrite_sessions "$store"
-  done
+  if [[ "$RESET_MODEL" -eq 1 ]]; then
+    if [[ "$SESSION_MODE" == "gateway" ]]; then
+      patch_model_reset_gateway
+    else
+      reset_models_offline
+    fi
+  else
+    echo "  WARNING: exact source=user pins disable configured model fallbacks."
+    for store in "${STORES[@]}"; do
+      rewrite_sessions "$store"
+    done
+  fi
 fi
 
 if [[ "$THINK_MODE_SET" -eq 1 || "$FAST_MODE_SET" -eq 1 ]]; then
@@ -576,6 +760,8 @@ echo ""
 echo "=== cron/jobs.json ==="
 if [[ -z "$TARGET" ]]; then
   echo "  skipped (no model target; session overrides only)"
+elif [[ "$RESET_MODEL" -eq 1 ]]; then
+  echo "  skipped (reset/unpin does not write a cron model pin)"
 elif [[ "$TOUCH_CRONS" -eq 0 ]]; then
   echo "  skipped (pass --crons to enable)"
 elif [[ -f "$CRON" ]]; then
@@ -607,5 +793,9 @@ echo ""
 if [[ "$DRY_RUN" -eq 1 ]]; then
   echo "[shell-swap] Dry run complete. No files modified."
 else
-  echo "[shell-swap] Done. Sessions set to $FULL_ID (model=$MODEL_ID provider=$PROVIDER)."
+  if [[ "$RESET_MODEL" -eq 1 ]]; then
+    echo "[shell-swap] Done. Sessions unpinned to inherit $FULL_ID and configured fallbacks."
+  else
+    echo "[shell-swap] Done. Sessions hard-pinned to $FULL_ID (model=$MODEL_ID provider=$PROVIDER)."
+  fi
 fi
