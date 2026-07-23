@@ -13,7 +13,7 @@ hard-pin an explicit non-default model for maintenance workflows.
 ## Usage
 
 ```bash
-exec scripts/switch.sh <target> [--set-primary] [--agent NAME] [--all-agents] [--crons] [--dry-run]
+exec scripts/switch.sh <target> [--set-primary|--pin-exact] [--agent NAME] [--all-agents] [--crons] [--dry-run]
 exec scripts/switch.sh --think LEVEL [--fast MODE] [--agent NAME] [--dry-run]
 exec scripts/switch.sh --fast MODE [--agent NAME] [--dry-run]
 ```
@@ -32,6 +32,7 @@ map to multiple providers, so the provider can't be guessed.
 exec scripts/switch.sh opus --dry-run
 exec scripts/switch.sh default
 exec scripts/switch.sh sol # unpins when sol is already the configured primary
+exec scripts/switch.sh sol --pin-exact # intentionally disables fallbacks
 exec scripts/switch.sh opus --set-primary # explicit config change, then unpin
 exec scripts/switch.sh anthropic/claude-opus-4-8
 exec scripts/switch.sh minimax --agent <your-agent>
@@ -47,7 +48,8 @@ exec scripts/switch.sh --think default --fast default
 2. Default/reset uses Gateway `sessions.patch {model:null}` to remove model
    overrides and stale `liveModelSwitchPending` state. Active sessions are
    deferred and must be retried once idle. No Gateway restart is needed.
-3. Exact non-default targets update `model`, `modelOverride`,
+3. Exact non-default targets—and a configured-primary target paired with
+   `--pin-exact`—update `model`, `modelOverride`,
    `modelProvider`, `providerOverride`, `modelOverrideSource`; strips stale
    fallback fields. These are `source=user` hard pins and disable configured
    model fallback for those sessions.

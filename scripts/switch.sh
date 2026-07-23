@@ -14,7 +14,7 @@
 # not "anthropic". Deriving provider from the key prefix alone would re-create
 # the divergence bug.
 #
-# Usage: switch.sh [<alias|provider/model|default>] [--set-primary] [--think LEVEL] [--fast MODE] [--agent NAME] [--all-agents] [--crons] [--dry-run]
+# Usage: switch.sh [<alias|provider/model|default>] [--set-primary|--pin-exact] [--think LEVEL] [--fast MODE] [--agent NAME] [--all-agents] [--crons] [--dry-run]
 
 set -euo pipefail
 
@@ -26,7 +26,7 @@ AGENTS_DIR="${AGENTS_DIR:-$OPENCLAW_DIR/agents}"
 usage() {
   cat <<'EOF'
 Usage:
-  switch.sh <target> [--set-primary] [--agent NAME] [--all-agents] [--crons] [--dry-run]
+  switch.sh <target> [--set-primary|--pin-exact] [--agent NAME] [--all-agents] [--crons] [--dry-run]
   switch.sh --think LEVEL [--fast MODE] [--agent NAME] [--dry-run]
   switch.sh --fast MODE [--agent NAME] [--dry-run]
 
@@ -43,6 +43,8 @@ can map to multiple providers, so the provider cannot be guessed safely.
 Flags:
   --set-primary  Explicitly update agents.defaults.model.primary in openclaw.json.
                  Without this flag, shell-swap NEVER changes openclaw.json.
+  --pin-exact    Hard-pin the explicit target with source=user, even when it
+                 equals the configured primary. Disables configured fallbacks.
   --think LEVEL  Set the session thinking override on every selected session.
                  LEVEL: off|minimal|low|medium|high|xhigh|adaptive|max|default.
                  "default" clears the session override so config/provider defaults win.
@@ -73,6 +75,7 @@ FAST_MODE_SET=0
 FAST_MODE=""
 SESSION_MODE="gateway"
 SET_PRIMARY=0
+PIN_EXACT=0
 RESET_MODEL=0
 
 while [[ $# -gt 0 ]]; do
@@ -80,6 +83,7 @@ while [[ $# -gt 0 ]]; do
     --dry-run) DRY_RUN=1 ;;
     --crons|-c) TOUCH_CRONS=1 ;;
     --set-primary) SET_PRIMARY=1 ;;
+    --pin-exact) PIN_EXACT=1 ;;
     --think|--thinking|-t)
       shift
       [[ $# -gt 0 ]] || { echo "[shell-swap] --think requires a level" >&2; exit 1; }
@@ -132,6 +136,18 @@ esac
 
 if [[ "$RESET_MODEL" -eq 1 && "$SET_PRIMARY" -eq 1 ]]; then
   echo "[shell-swap] --set-primary cannot be combined with target '$TARGET'; pass an explicit model target." >&2
+  exit 1
+fi
+if [[ "$PIN_EXACT" -eq 1 && -z "$TARGET" ]]; then
+  echo "[shell-swap] --pin-exact requires an explicit model target." >&2
+  exit 1
+fi
+if [[ "$PIN_EXACT" -eq 1 && "$RESET_MODEL" -eq 1 ]]; then
+  echo "[shell-swap] --pin-exact cannot be combined with target '$TARGET'; pass an explicit model target." >&2
+  exit 1
+fi
+if [[ "$PIN_EXACT" -eq 1 && "$SET_PRIMARY" -eq 1 ]]; then
+  echo "[shell-swap] --pin-exact and --set-primary express conflicting session intent; choose one." >&2
   exit 1
 fi
 if [[ "$SET_PRIMARY" -eq 1 && -n "$AGENT_FILTER" ]]; then
@@ -263,7 +279,7 @@ PYEOF
   # redundant source=user overrides. Likewise, selecting the already-configured
   # primary means "inherit default" unless the operator explicitly asks for an
   # exact no-fallback pin.
-  if [[ "$SET_PRIMARY" -eq 1 || "$FULL_ID" == "$CONFIG_PRIMARY" ]]; then
+  if [[ "$SET_PRIMARY" -eq 1 || ( "$FULL_ID" == "$CONFIG_PRIMARY" && "$PIN_EXACT" -eq 0 ) ]]; then
     RESET_MODEL=1
   fi
 else
@@ -294,6 +310,7 @@ else
   echo "[shell-swap] Agent scope       : ALL agents"
 fi
 [[ "$SET_PRIMARY" -eq 1 ]] && echo "[shell-swap] Config mutation   : ENABLED (--set-primary)" || echo "[shell-swap] Config mutation   : disabled"
+[[ "$PIN_EXACT" -eq 1 ]] && echo "[shell-swap] Pin intent        : EXPLICIT (--pin-exact; fallbacks disabled)"
 if [[ "$THINK_MODE_SET" -eq 1 || "$FAST_MODE_SET" -eq 1 ]]; then
   [[ "$THINK_MODE_SET" -eq 1 ]] && echo "[shell-swap] Thinking override: $THINK_VALUE"
   [[ "$FAST_MODE_SET" -eq 1 ]] && echo "[shell-swap] Fast override    : $FAST_VALUE"

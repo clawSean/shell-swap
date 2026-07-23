@@ -13,7 +13,7 @@ fallback chain. Exact non-default hard pins remain available, but are explicit
 ## Usage
 
 ```bash
-exec scripts/switch.sh <target> [--set-primary] [--agent NAME] [--all-agents] [--crons] [--dry-run]
+exec scripts/switch.sh <target> [--set-primary|--pin-exact] [--agent NAME] [--all-agents] [--crons] [--dry-run]
 exec scripts/switch.sh --think LEVEL [--fast MODE] [--agent NAME] [--dry-run]
 exec scripts/switch.sh --fast MODE [--agent NAME] [--dry-run]
 ```
@@ -38,6 +38,9 @@ Session override flags:
   Modes: `on|off|auto|default`. `default` clears the session override.
 - `--set-primary` explicitly changes `agents.defaults.model.primary`. Without
   it, shell-swap does not modify `openclaw.json`.
+- `--pin-exact` preserves intentional hard-pin semantics even when the explicit
+  target equals the configured primary. It writes `source=user` and therefore
+  disables configured fallbacks. It cannot be combined with `--set-primary`.
 - `--session-mode gateway|offline` controls how reset / `--think` / `--fast` are
   written. Default is `gateway`, which calls Gateway `sessions.patch` and
   updates warm in-memory sessions without a restart. `offline` edits
@@ -46,11 +49,13 @@ Session override flags:
 ### What it does
 
 1. Leaves `openclaw.json` unchanged unless `--set-primary` is supplied.
-2. For `default`, or a target equal to the configured primary, calls Gateway
-   `sessions.patch {model:null}` for every idle selected session. This removes
-   model overrides, fallback-origin state, and `liveModelSwitchPending` without
-   a restart. Active sessions are deferred; rerun once they are idle.
-3. For an exact non-default target, updates every selected session store:
+2. For `default`, or a target equal to the configured primary without
+   `--pin-exact`, calls Gateway `sessions.patch {model:null}` for every idle
+   selected session. This removes model overrides, fallback-origin state, and
+   `liveModelSwitchPending` without a restart. Active sessions are deferred;
+   rerun once they are idle.
+3. For an exact non-default target—or a configured-primary target paired with
+   `--pin-exact`—updates every selected session store:
    - sets `model` and `modelOverride` → the resolved model id
    - sets `modelProvider` and `providerOverride` → the resolved provider
    - sets `modelOverrideSource` → `user`
@@ -96,6 +101,9 @@ exec scripts/switch.sh opus
 
 # Safely inherit the configured primary + fallbacks (no restart/config edit)
 exec scripts/switch.sh default
+
+# Intentionally pin the configured primary and disable fallbacks
+exec scripts/switch.sh sol --pin-exact
 
 # Explicitly change the configured primary, then unpin sessions to inherit it
 exec scripts/switch.sh opus --set-primary
@@ -146,7 +154,8 @@ exec scripts/switch.sh --think off --session-mode offline
   via `OPENCLAW_MCP_AGENT_ID`.
 - **Tests:** `/opt/homebrew/bin/bash scripts/test.sh` runs a hermetic regression
   suite covering no-config-by-default behavior, Gateway null-unpin, active-run
-  deferral, pending-flag cleanup, explicit config mutation, and offline safety.
+  deferral, pending-flag cleanup, same-primary `--pin-exact`, explicit config
+  mutation, and offline safety.
 - **Thinking compatibility:** Gateway `sessions.patch` validates the selected
   level against the session's effective provider/model profile. For example,
   `--think max` can be rejected on an OpenAI session whose current profile only

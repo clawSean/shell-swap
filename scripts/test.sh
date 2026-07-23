@@ -163,6 +163,33 @@ PY
 ok "configured-primary alias normalizes to null unpin"
 
 write_sessions
+run_swap sol --pin-exact >"$FIXTURE/primary-pin.out"
+[[ "$(shasum -a 256 "$FIXTURE/oc/openclaw.json" | awk '{print $1}')" == "$config_hash_before" ]] || fail "same-primary exact pin changed config"
+grep -q 'EXPLICIT (--pin-exact; fallbacks disabled)' "$FIXTURE/primary-pin.out" || fail "same-primary exact pin intent missing"
+python3 - "$FIXTURE/oc/agents/main/sessions/sessions.json" <<'PY' || fail "same-primary exact pin fields"
+import json, sys
+with open(sys.argv[1]) as f: d=json.load(f)
+assert all(e.get("model") == "gpt-5.6-sol" and e.get("modelOverride") == "gpt-5.6-sol" for e in d.values())
+assert all(e.get("modelProvider") == "codex" and e.get("providerOverride") == "codex" for e in d.values())
+assert all(e.get("modelOverrideSource") == "user" for e in d.values())
+PY
+ok "--pin-exact preserves intentional same-as-primary hard pin semantics"
+
+for invalid_args in \
+  "--pin-exact" \
+  "default --pin-exact" \
+  "sol --pin-exact --set-primary"
+do
+  set +e
+  # shellcheck disable=SC2086
+  run_swap $invalid_args >"$FIXTURE/pin-conflict.out" 2>&1
+  rc=$?
+  set -e
+  [[ "$rc" -ne 0 ]] || fail "invalid --pin-exact combination succeeded: $invalid_args"
+done
+ok "--pin-exact rejects missing, reset, and --set-primary conflicts"
+
+write_sessions
 run_swap opus >"$FIXTURE/pin.out"
 [[ "$(shasum -a 256 "$FIXTURE/oc/openclaw.json" | awk '{print $1}')" == "$config_hash_before" ]] || fail "exact pin changed config without --set-primary"
 grep -q 'exact source=user pins disable configured model fallbacks' "$FIXTURE/pin.out" || fail "exact pin warning missing"
