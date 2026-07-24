@@ -168,7 +168,9 @@ fi
 # --- Resolve target -> canonical {full_id, provider, model_id} from LIVE config ---
 # provider = resolved entry's agentRuntime.id if set, else first path segment.
 if [[ -n "$TARGET" ]]; then
-  RESOLVED="$(python3 - "$CONFIG" "$TARGET" <<'PYEOF'
+  # Bash 3.2 cannot safely parse a heredoc nested directly inside $(...).
+  resolve_target() {
+    python3 - "$CONFIG" "$TARGET" <<'PYEOF'
 import json, sys
 
 config_path, target = sys.argv[1], sys.argv[2]
@@ -217,7 +219,9 @@ print(full_id)
 print(provider)
 print(model_id)
 PYEOF
-  )" || exit $?
+  }
+  RESOLVED="$(resolve_target)" || exit $?
+  unset -f resolve_target
 
   FULL_ID="$(sed -n '1p' <<<"$RESOLVED")"
   PROVIDER="$(sed -n '2p' <<<"$RESOLVED")"
@@ -480,24 +484,31 @@ patch_session_overrides_gateway() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     for store in "${STORES[@]}"; do
       local count
-      count="$(python3 - "$store" <<'PYEOF'
-import json, sys
-with open(sys.argv[1]) as f:
-    data = json.load(f)
-print(len(data) if isinstance(data, dict) else 0)
-PYEOF
-)"
+      count="$(python3 -c 'import json, sys; data = json.load(open(sys.argv[1])); print(len(data) if isinstance(data, dict) else 0)' "$store")"
       skipped=$((skipped + count))
     done
     echo "  dry-run: would patch $skipped session(s) through Gateway sessions.patch"
     return 0
   fi
 
+  # Keep the heredoc in a helper; nesting it directly in < <(...) breaks Bash 3.2.
+  list_session_keys() {
+    python3 - "${STORES[@]}" <<'PYEOF'
+import json, sys
+for path in sys.argv[1:]:
+    with open(path) as f:
+        data = json.load(f)
+    if isinstance(data, dict):
+        for key in data.keys():
+            print(key)
+PYEOF
+  }
+
   while IFS= read -r key; do
     [[ -n "$key" ]] || continue
     attempted=$((attempted + 1))
     local params
-    params="$(python3 - "$key" "$THINK_MODE_SET" "$THINK_VALUE" "$FAST_MODE_SET" "$FAST_VALUE" <<'PYEOF'
+    params="$(python3 -c '
 import json, sys
 key, think_set, think_value, fast_set, fast_value = sys.argv[1], sys.argv[2] == "1", sys.argv[3], sys.argv[4] == "1", sys.argv[5]
 params = {"key": key}
@@ -513,8 +524,7 @@ if fast_set:
     else:
         params["fastMode"] = fast_value
 print(json.dumps(params, separators=(",", ":")))
-PYEOF
-)"
+' "$key" "$THINK_MODE_SET" "$THINK_VALUE" "$FAST_MODE_SET" "$FAST_VALUE")"
     local out
     if out="$(openclaw gateway call sessions.patch --params "$params" --json --timeout 10000 2>&1)"; then
       if python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("ok") else 1)' <<<"$out" 2>/dev/null; then
@@ -529,16 +539,8 @@ PYEOF
       failed=$((failed + 1))
       failure_log="${failure_log}    ${key}: ${out}"$'\n'
     fi
-  done < <(python3 - "${STORES[@]}" <<'PYEOF'
-import json, sys
-for path in sys.argv[1:]:
-    with open(path) as f:
-        data = json.load(f)
-    if isinstance(data, dict):
-        for key in data.keys():
-            print(key)
-PYEOF
-)
+  done < <(list_session_keys)
+  unset -f list_session_keys
 
   echo "  sessions.patch attempted=$attempted ok=$ok failed=$failed"
   if [[ "$failed" -gt 0 ]]; then
