@@ -8,6 +8,8 @@ pair across config + every agent session store in one command.
 
 • `SKILL.md` — OpenClaw skill definition
 • `scripts/switch.sh` — the switch script
+• `docs/stale-openai-profile-cooldowns.md` — recovery runbook for stale
+  OpenAI/Codex profile blocks
 
 ## Usage
 
