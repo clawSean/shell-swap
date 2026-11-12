@@ -71,6 +71,11 @@ exec scripts/switch.sh gpt --set-default --dry-run --json
 
 ## Contracts
 
+- Shell Swap owns session selection, not account availability. To mark an
+  account rate-limited or unavailable until a deadline, use the
+  `openai-account-routing` skill and
+  `knowledge/procedures/openai-cooldown-reset.md`; do not encode cooldowns here,
+  rewrite auth order, or launch background helpers.
 - Gateway derives provider/runtime/model fields from the canonical model
   selector. Do not directly stamp `modelProvider`, `providerOverride`, legacy
   JSON stores, or SQLite rows.
